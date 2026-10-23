@@ -68,17 +68,23 @@ Datasets download to `data/raw/` on first use (git-ignored).
 |------------|------------|-------|-------|-------|
 | popularity | random     | 0.201 | 0.500 | 0.499 |
 | popularity | popularity | 0.293 | 0.565 | 0.564 |
-| popularity | item_knn   | 0.252 | 0.512 | 0.499 |
+| popularity | item_knn   | 0.298 | 0.561 | 0.549 |
 | uniform    | random     | 0.199 | 0.498 | 0.498 |
 | uniform    | popularity | 0.620 | 0.835 | 0.832 |
-| uniform    | item_knn   | 0.530 | 0.785 | 0.755 |
+| uniform    | item_knn   | 0.580 | 0.815 | 0.795 |
 
 Observations so far:
 
+- Item-kNN uses the user's last 10 items, picked on validation (popularity negatives):
+
+  | max_history | 10    | 20    | 50    | 100   |
+  |-------------|-------|-------|-------|-------|
+  | hit@1       | 0.291 | 0.248 | 0.226 | 0.218 |
+  | gauc        | 0.540 | 0.501 | 0.477 | 0.473 |
+
 - Recency dominates: the median gap between an episode and the user's previous
-  interaction is 0 days. Item-kNN over the last 10 items beats the same model over the
-  last 100 (hit@1 0.298 vs 0.252). That's a context-engineering result before any LLM
-  is involved: more history is not more signal.
+  interaction is 0 days, and kNN gets worse with every extra slice of history. That's a
+  context-engineering result before any LLM is involved: more history is not more signal.
 - `ml-latest-small` yields only ~130 episodes under a global cutoff (most users rate in
   a single burst), so it's for smoke tests only.
 

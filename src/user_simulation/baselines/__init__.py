@@ -46,7 +46,7 @@ class ItemKNN:
     name = "item_knn"
     probabilistic = False
 
-    def __init__(self, max_history: int = 100):
+    def __init__(self, max_history: int = 10):  # picked on validation from {10, 20, 50, 100}
         self.max_history = max_history
 
     def fit(self, train: pd.DataFrame) -> None:
