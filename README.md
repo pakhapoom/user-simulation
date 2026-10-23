@@ -44,6 +44,7 @@ Datasets download to `data/raw/` on first use (git-ignored).
 | popularity | random     | 0.201 | 0.500 | 0.499 |
 | popularity | popularity | 0.293 | 0.565 | 0.564 |
 | popularity | item_knn   | 0.252 | 0.512 | 0.499 |
+| uniform    | random     | 0.199 | 0.498 | 0.498 |
 | uniform    | popularity | 0.620 | 0.835 | 0.832 |
 | uniform    | item_knn   | 0.530 | 0.785 | 0.755 |
 
