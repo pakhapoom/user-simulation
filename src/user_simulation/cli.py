@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from user_simulation.baselines import ItemKNN, Popularity, Random
-from user_simulation.data import DATASETS, SplitConfig, load, make_split
+from user_simulation.data import DATASETS, SplitConfig, load, make_split, make_validation_split
 from user_simulation.eval import evaluate
 
 
@@ -18,6 +18,10 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("eval", help="score baselines on held-out decision episodes")
     run.add_argument("--dataset", choices=sorted(DATASETS), default="ml-1m")
+    run.add_argument(
+        "--split", choices=["validation", "test"], default="validation",
+        help="tune on validation; score on test only to report a final number",
+    )
     defaults = SplitConfig()
     run.add_argument("--test-fraction", type=float, default=defaults.test_fraction)
     run.add_argument("--min-history", type=int, default=defaults.min_history)
@@ -36,11 +40,11 @@ def main() -> None:
         negative_sampling=args.negatives,
         seed=args.seed,
     )
-    split = make_split(interactions, config)
+    split = (make_split if args.split == "test" else make_validation_split)(interactions, config)
     cutoff = datetime.fromtimestamp(split.cutoff, tz=timezone.utc).date()
     users = len({e.user_id for e in split.episodes})
     print(
-        f"{args.dataset}: {len(interactions):,} interactions, cutoff {cutoff}, "
+        f"{args.dataset} ({args.split}): {len(interactions):,} interactions, cutoff {cutoff}, "
         f"{len(split.episodes):,} episodes from {users:,} users, "
         f"slate {config.slate_size} ({config.negative_sampling} negatives)\n"
     )

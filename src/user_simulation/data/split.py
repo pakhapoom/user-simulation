@@ -54,9 +54,28 @@ class Split:
         return frame[frame["timestamp"] < before]
 
 
-def make_split(interactions: pd.DataFrame, config: SplitConfig = SplitConfig()) -> Split:
+def _cutoff(interactions: pd.DataFrame, config: SplitConfig) -> int:
+    return int(interactions["timestamp"].quantile(1 - config.test_fraction))
+
+
+def make_validation_split(
+    interactions: pd.DataFrame, config: SplitConfig = SplitConfig(), days: int = 14
+) -> Split:
+    """The same split applied to the log before the test cutoff, with the last `days`
+    before it as the future: an earlier past/future pair for tuning, which never sees
+    anything at or after the test cutoff."""
+    test_cutoff = _cutoff(interactions, config)
+    past = interactions[interactions["timestamp"] < test_cutoff]
+    return make_split(past, config, cutoff=test_cutoff - days * 86_400)
+
+
+def make_split(
+    interactions: pd.DataFrame, config: SplitConfig = SplitConfig(), cutoff: int | None = None
+) -> Split:
+    """`cutoff` defaults to the `test_fraction` quantile of the timeline."""
     rng = np.random.default_rng(config.seed)
-    cutoff = int(interactions["timestamp"].quantile(1 - config.test_fraction))
+    if cutoff is None:
+        cutoff = _cutoff(interactions, config)
     train = interactions[interactions["timestamp"] < cutoff]
 
     train_counts = train.groupby("user_id").size()

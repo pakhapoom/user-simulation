@@ -52,14 +52,15 @@ chance-level numbers.
 
 ```bash
 uv sync
-uv run user-sim eval                                    # ml-1m, slate of 5, popularity negatives
+uv run user-sim eval                                    # validation split: ml-1m, slate of 5, popularity negatives
+uv run user-sim eval --split test                       # test split: only for reporting final numbers
 uv run user-sim eval --negatives uniform --slate-size 10
 uv run pytest
 ```
 
 Datasets download to `data/raw/` on first use (git-ignored).
 
-## Baselines (ml-1m, default settings, seed 0)
+## Baselines (ml-1m test split, default settings, seed 0)
 
 4,874 episodes from 1,044 users; cutoff 2000-12-02.
 
@@ -85,7 +86,10 @@ Observations so far:
 
 - MovieLens records *ratings*, not impressions. "Rated" stands in for "watched", and
   "never rated" stands in for "shown but skipped". Ratings also arrive in bulk sessions.
-- Hyper-parameters must be chosen on a validation split, not on these episodes.
+- Hyper-parameters must be chosen on the validation split (`--split validation`, the
+  default), not on these episodes. Validation reruns the same split on the log before the
+  test cutoff, with the last 14 days as its future: cutoff 2000-11-18, 656 episodes from
+  174 users.
 
 ## Layout
 

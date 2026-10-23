@@ -1,15 +1,15 @@
 import numpy as np
 import pandas as pd
 
-from user_simulation.data import SplitConfig, make_split
+from user_simulation.data import SplitConfig, make_split, make_validation_split
 
 
-def synthetic_log(n_users=30, n_items=60, per_user=40, seed=0):
+def synthetic_log(n_users=30, n_items=60, per_user=40, seed=0, span=1_000_000):
     rng = np.random.default_rng(seed)
     rows = []
     for user in range(n_users):
         items = rng.choice(n_items, size=per_user, replace=False)
-        times = np.sort(rng.integers(0, 1_000_000, size=per_user))
+        times = np.sort(rng.integers(0, span, size=per_user))
         rows += [(user, int(i), 4.0, int(t)) for i, t in zip(items, times)]
     return pd.DataFrame(rows, columns=["user_id", "item_id", "rating", "timestamp"])
 
@@ -47,3 +47,16 @@ def test_split_is_deterministic_and_respects_limits():
     assert per_user.max() <= 3
     train_counts = a.train.groupby("user_id").size()
     assert all(train_counts[u] >= 5 for u in per_user.index)
+
+
+def test_validation_split_is_the_two_weeks_before_test_cutoff():
+    log = synthetic_log(span=100 * 86_400)
+    config = SplitConfig(min_history=5)
+    test, validation = make_split(log, config), make_validation_split(log, config)
+    assert validation.episodes
+    assert validation.cutoff == test.cutoff - 14 * 86_400
+    assert all(validation.cutoff <= ep.timestamp < test.cutoff for ep in validation.episodes)
+    # Nothing at or after the test cutoff is visible: not in train, not in any history.
+    assert (validation.train["timestamp"] < validation.cutoff).all()
+    for ep in validation.episodes:
+        assert (validation.history(ep.user_id, ep.timestamp + 1)["timestamp"] < test.cutoff).all()
