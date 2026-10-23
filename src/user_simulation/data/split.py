@@ -23,7 +23,14 @@ class SplitConfig:
     min_history: int = 20  # users need this many pre-cutoff interactions to be evaluated
     episodes_per_user: int = 5  # first N post-cutoff interactions per user become episodes
     slate_size: int = 5  # 1 positive + (slate_size - 1) negatives
-    negative_sampling: Literal["popularity", "uniform"] = "popularity"
+    # "matched": films released within `year_tolerance` years of the positive, weighted by
+    # how often each was rated in the last `recent_window` ratings before the decision.
+    # Returning users mostly rate new releases, so without year matching "the newest film
+    # on the slate" is the answer about half the time. "popularity" (pre-cutoff counts)
+    # and "uniform" are kept for comparison.
+    negative_sampling: Literal["matched", "popularity", "uniform"] = "matched"
+    recent_window: int = 100_000
+    year_tolerance: int = 0
     seed: int = 0
 
 
@@ -59,20 +66,29 @@ def _cutoff(interactions: pd.DataFrame, config: SplitConfig) -> int:
 
 
 def make_validation_split(
-    interactions: pd.DataFrame, config: SplitConfig = SplitConfig(), days: int = 14
+    interactions: pd.DataFrame,
+    config: SplitConfig = SplitConfig(),
+    days: int = 14,
+    item_years: pd.Series | None = None,
 ) -> Split:
     """The same split applied to the log before the test cutoff, with the last `days`
     before it as the future: an earlier past/future pair for tuning, which never sees
     anything at or after the test cutoff."""
     test_cutoff = _cutoff(interactions, config)
     past = interactions[interactions["timestamp"] < test_cutoff]
-    return make_split(past, config, cutoff=test_cutoff - days * 86_400)
+    return make_split(past, config, cutoff=test_cutoff - days * 86_400, item_years=item_years)
 
 
 def make_split(
-    interactions: pd.DataFrame, config: SplitConfig = SplitConfig(), cutoff: int | None = None
+    interactions: pd.DataFrame,
+    config: SplitConfig = SplitConfig(),
+    cutoff: int | None = None,
+    item_years: pd.Series | None = None,
 ) -> Split:
-    """`cutoff` defaults to the `test_fraction` quantile of the timeline."""
+    """`cutoff` defaults to the `test_fraction` quantile of the timeline. `item_years`
+    (release year by item_id) is required for "matched" negatives."""
+    if config.negative_sampling == "matched" and item_years is None:
+        raise ValueError('"matched" negatives need item_years')
     rng = np.random.default_rng(config.seed)
     if cutoff is None:
         cutoff = _cutoff(interactions, config)
@@ -95,6 +111,12 @@ def make_split(
         weights = train["item_id"].value_counts().reindex(item_ids, fill_value=0).to_numpy() + 1.0
     else:
         weights = np.ones(len(item_ids))
+    matched = config.negative_sampling == "matched"
+    if matched:
+        years = item_years.reindex(item_ids).to_numpy(float)
+        by_time = interactions.sort_values("timestamp", kind="stable")
+        times = by_time["timestamp"].to_numpy()
+        item_codes = np.searchsorted(item_ids, by_time["item_id"].to_numpy())
 
     # Exclude anything the user ever rated: unrated is our only proxy for "not chosen".
     user_items = interactions.groupby("user_id")["item_id"].agg(lambda s: s.to_numpy())
@@ -103,6 +125,19 @@ def make_split(
     n_negatives = config.slate_size - 1
     for row in test.itertuples(index=False):
         allowed = (first_seen_ts <= row.timestamp) & ~np.isin(item_ids, user_items[row.user_id])
+        if matched:
+            end = np.searchsorted(times, row.timestamp)  # strictly before the decision
+            window = item_codes[max(0, end - config.recent_window) : end]
+            weights = np.bincount(window, minlength=len(item_ids)) + 1.0
+            year = years[np.searchsorted(item_ids, row.item_id)]
+            tolerance = config.year_tolerance
+            # Widen the band for sparse years; a positive without a year is not matched.
+            while not np.isnan(year) and tolerance < 200:
+                band = allowed & (np.abs(years - year) <= tolerance)
+                if band.sum() >= n_negatives:
+                    allowed = band
+                    break
+                tolerance = max(1, 2 * tolerance)
         pool, pool_weights = item_ids[allowed], weights[allowed]
         if len(pool) < n_negatives:
             continue

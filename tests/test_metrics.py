@@ -2,9 +2,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from test_split import synthetic_log
+from test_split import split_of, synthetic_log
 from user_simulation.baselines import ItemKNN, Random
-from user_simulation.data import Episode, SplitConfig, make_split
+from user_simulation.data import Episode, SplitConfig
 from user_simulation.eval import bootstrap_ci, evaluate
 from user_simulation.eval.metrics import expected_calibration_error, slate_metrics
 
@@ -63,7 +63,7 @@ def test_bootstrap_ci_resamples_whole_users():
 
 
 def test_random_vs_random_with_another_seed_is_no_difference():
-    split = make_split(synthetic_log(n_users=200), SplitConfig(min_history=5))
+    split = split_of(synthetic_log(n_users=200), SplitConfig(min_history=5))
     a = evaluate(Random(seed=0), split).per_slate
     b = evaluate(Random(seed=1), split).per_slate
     for metric in ["hit@1", "gauc"]:

@@ -3,15 +3,15 @@ import json
 import numpy as np
 import pandas as pd
 
-from test_split import synthetic_log
+from test_split import split_of, synthetic_log
 from user_simulation import agent
 from user_simulation.agent import OfflineAgent, export, sample_episodes
-from user_simulation.data import SplitConfig, make_split
+from user_simulation.data import SplitConfig
 from user_simulation.eval import evaluate
 
 
 def setup(tmp_path):
-    split = make_split(synthetic_log(), SplitConfig(min_history=5))
+    split = split_of(synthetic_log(), SplitConfig(min_history=5))
     items = pd.DataFrame(
         {"item_id": range(60), "title": [f"Movie {i}" for i in range(60)], "year": 1999, "genres": [["Drama"]] * 60}
     )
@@ -51,14 +51,14 @@ def test_changing_the_prompt_invalidates_old_answers(tmp_path, monkeypatch):
 
 
 def test_subset_has_one_episode_per_user():
-    split = make_split(synthetic_log(), SplitConfig(min_history=5))
+    split = split_of(synthetic_log(), SplitConfig(min_history=5))
     episodes = sample_episodes(split, 10)
     assert len(episodes) == 10 == len({e.user_id for e in episodes})
     assert episodes == sample_episodes(split, 10)
 
 
 def test_excluding_users_keeps_the_other_picks():
-    split = make_split(synthetic_log(), SplitConfig(min_history=5))
+    split = split_of(synthetic_log(), SplitConfig(min_history=5))
     full = sample_episodes(split, 10)
     dropped = {full[0].user_id, full[3].user_id}
     assert sample_episodes(split, 10, exclude_users=dropped) == [e for e in full if e.user_id not in dropped]

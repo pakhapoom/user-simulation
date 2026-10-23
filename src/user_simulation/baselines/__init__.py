@@ -37,9 +37,8 @@ class Popularity:
 
 
 class NewestRelease:
-    """Score = release year. Popularity-matched negatives are drawn from pre-cutoff counts,
-    so recent releases are rarely negatives; this baseline measures how much that alone
-    gives away."""
+    """Score = release year: how much "returning users rate new releases" alone gives away.
+    Year-matched negatives should bring it back to chance."""
 
     name = "newest_release"
     probabilistic = False

@@ -33,7 +33,9 @@ def main() -> None:
     split_args.add_argument("--min-history", type=int, default=defaults.min_history)
     split_args.add_argument("--episodes-per-user", type=int, default=defaults.episodes_per_user)
     split_args.add_argument("--slate-size", type=int, default=defaults.slate_size)
-    split_args.add_argument("--negatives", choices=["popularity", "uniform"], default=defaults.negative_sampling)
+    split_args.add_argument(
+        "--negatives", choices=["matched", "popularity", "uniform"], default=defaults.negative_sampling
+    )
     split_args.add_argument("--seed", type=int, default=defaults.seed)
     llm_args = argparse.ArgumentParser(add_help=False)
     llm_args.add_argument("--n-episodes", type=int, default=300, help="fixed random subset of episodes")
@@ -59,7 +61,10 @@ def main() -> None:
         negative_sampling=args.negatives,
         seed=args.seed,
     )
-    split = (make_split if args.split == "test" else make_validation_split)(interactions, config)
+    item_years = items.set_index("item_id")["year"]
+    split = (make_split if args.split == "test" else make_validation_split)(
+        interactions, config, item_years=item_years
+    )
     episodes = split.episodes
     if args.command != "eval":
         run_dir = args.run_dir or DEFAULT_RUNS_DIR / f"{args.split}-last{args.n_recent}"
