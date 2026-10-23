@@ -48,6 +48,11 @@ Metrics: `hit@1` (did the top pick match the real choice), `mrr`, `ndcg`, `gauc`
 probabilities. Ties count as their random-ordering expectation, so constant scores give
 chance-level numbers.
 
+`hit@1` and `gauc` come with 95% bootstrap intervals, plus a paired difference against the
+popularity baseline on the same episodes. The bootstrap resamples whole users, since one
+user's slates are not independent; random vs random with another seed comes out as no
+difference.
+
 ## Usage
 
 ```bash

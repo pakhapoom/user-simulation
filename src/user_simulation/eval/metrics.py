@@ -52,3 +52,21 @@ def summarize(
         summary["log_loss"] = log_loss(scores, labels)
         summary["ece"] = expected_calibration_error(scores, labels)
     return summary
+
+
+def bootstrap_ci(
+    values: np.ndarray, groups: np.ndarray, n_boot: int = 2000, alpha: float = 0.05, seed: int = 0
+) -> tuple[float, float, float]:
+    """Mean of per-slate `values` with a (1 - alpha) percentile interval.
+
+    Resamples whole groups (users), since one user's slates are not independent. For a
+    paired comparison pass the per-slate difference between two predictors on the same
+    episodes.
+    """
+    _, codes = np.unique(groups, return_inverse=True)
+    sums = np.bincount(codes, weights=values)
+    counts = np.bincount(codes).astype(float)
+    picks = np.random.default_rng(seed).integers(0, len(sums), size=(n_boot, len(sums)))
+    means = sums[picks].sum(axis=1) / counts[picks].sum(axis=1)
+    lo, hi = np.quantile(means, [alpha / 2, 1 - alpha / 2])
+    return float(values.mean()), float(lo), float(hi)
