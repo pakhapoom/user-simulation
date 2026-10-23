@@ -4,6 +4,30 @@ An experiment in building an LLM agent that simulates a user's decision — e.g.
 everything this user has done up until now, will they click/watch this movie?* — and
 measuring whether it actually predicts real behavior better than classic recommenders.
 
+## Workflow
+
+```mermaid
+flowchart LR
+    A["Interaction log<br/>MovieLens"] --> B["Temporal split<br/>past / future"]
+    B --> C["Episodes<br/>history + slate of candidates"]
+    C --> D{"Predictor"}
+    D --> D1["Baselines<br/>random, popularity, item-kNN"]
+    D --> D2["LLM agent<br/>planned"]
+    D1 --> E["Metrics<br/>hit@1, gauc, auc, calibration"]
+    D2 --> E
+    E --> F["Compare: accuracy,<br/>calibration, cost per decision"]
+```
+
+1. **Load** a real interaction log (who watched what, and when).
+2. **Split** it at a point in time: the past is what the simulator may learn from, the
+   future is what it has to predict.
+3. **Build episodes**: each future interaction becomes a decision — the user's history up
+   to that moment plus a slate of movies, one of which they actually chose.
+4. **Predict**: every simulator scores the same slates through one shared interface, from
+   simple baselines to the LLM agent.
+5. **Score** the predictions against what users really did, and compare simulators on
+   accuracy, calibration and cost.
+
 ## Framing
 
 Every simulator answers the same question on the same **episodes**:
@@ -72,10 +96,3 @@ src/user_simulation/
   eval/        metrics and the evaluate() runner
   predictor.py the Predictor protocol every simulator (incl. the LLM agent) implements
 ```
-
-## Next
-
-1. Validation split (for hyper-parameters and probability calibration).
-2. Item metadata tools + user profile memo (compaction).
-3. LLM agent implementing `Predictor`, with ablations: raw history vs last-N vs profile vs
-   profile + tool retrieval, scored on accuracy, calibration and tokens per decision.
