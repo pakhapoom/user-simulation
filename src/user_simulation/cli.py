@@ -1,8 +1,8 @@
 """`user-sim`: build episodes from MovieLens and score every predictor on them.
 
 `eval` scores the baselines. `llm-export` writes prompts for the offline LLM agent on a
-fixed subset of episodes, and `llm-eval` scores its answers next to the baselines on that
-same subset."""
+fixed subset of episodes, and `llm-eval` scores its answers (one or more contexts) next to
+the baselines on that same subset."""
 
 from __future__ import annotations
 
@@ -13,7 +13,15 @@ from pathlib import Path
 
 import pandas as pd
 
-from user_simulation.agent import DEFAULT_RUNS_DIR, OfflineAgent, excluded_users, export, sample_episodes
+from user_simulation.agent import (
+    CONTEXTS,
+    DEFAULT_RUNS_DIR,
+    OfflineAgent,
+    Prompter,
+    excluded_users,
+    export,
+    sample_episodes,
+)
 from user_simulation.baselines import ItemKNN, NewestRelease, Popularity, Random
 from user_simulation.data import DATASETS, SplitConfig, load, make_split, make_validation_split
 from user_simulation.eval import Evaluation, bootstrap_ci, evaluate
@@ -39,18 +47,27 @@ def main() -> None:
     split_args.add_argument("--seed", type=int, default=defaults.seed)
     llm_args = argparse.ArgumentParser(add_help=False)
     llm_args.add_argument("--n-episodes", type=int, default=300, help="fixed random subset of episodes")
-    llm_args.add_argument("--n-recent", type=int, default=20, help="history items shown in the prompt")
-    llm_args.add_argument("--run-dir", type=Path, help="default: data/llm/<split>-last<n-recent>")
+    llm_args.add_argument("--context", choices=CONTEXTS, nargs="+", default=["recent"])
+    llm_args.add_argument("--n-recent", type=int, default=20, help="history items shown by the recent context")
+    llm_args.add_argument(
+        "--run-dir", type=Path, help="one context only; default: data/llm/<split>-<negatives>-<context>"
+    )
+    llm_args.add_argument("--memo-dir", type=Path, help="default: data/llm/<split>-<negatives>-memo")
 
     commands.add_parser("eval", parents=[split_args], help="score baselines on held-out decision episodes")
     export_cmd = commands.add_parser(
         "llm-export", parents=[split_args, llm_args], help="write LLM agent prompts for a subset"
     )
     export_cmd.add_argument("--batch-size", type=int, default=25)
-    commands.add_parser(
+    eval_cmd = commands.add_parser(
         "llm-eval", parents=[split_args, llm_args], help="score the LLM agent's answers vs baselines"
     )
+    eval_cmd.add_argument("--reference", default="popularity", help="predictor for paired differences")
     args = parser.parse_args()
+    if args.command != "eval" and args.run_dir and len(args.context) > 1:
+        parser.error("--run-dir needs a single --context")
+    if args.command == "llm-export" and len(args.context) > 1:
+        parser.error("llm-export takes a single --context")
 
     interactions, items = load(args.dataset)
     config = SplitConfig(
@@ -67,8 +84,15 @@ def main() -> None:
     )
     episodes = split.episodes
     if args.command != "eval":
-        run_dir = args.run_dir or DEFAULT_RUNS_DIR / f"{args.split}-last{args.n_recent}"
-        episodes = sample_episodes(split, args.n_episodes, seed=args.seed, exclude_users=excluded_users(run_dir))
+        base = f"{args.split}-{args.negatives}"
+        memo_dir = args.memo_dir or DEFAULT_RUNS_DIR / f"{base}-memo"
+        prompters = []
+        for context in args.context:
+            name = f"{context}{args.n_recent}" if context == "recent" else context
+            run_dir = args.run_dir or DEFAULT_RUNS_DIR / f"{base}-{name}"
+            prompters.append(Prompter(items, context, args.n_recent, run_dir, memo_dir))
+        excluded = set().union(*(excluded_users(p.run_dir) for p in prompters))
+        episodes = sample_episodes(split, args.n_episodes, seed=args.seed, exclude_users=excluded)
     cutoff = datetime.fromtimestamp(split.cutoff, tz=timezone.utc).date()
     users = len({e.user_id for e in episodes})
     print(
@@ -78,24 +102,27 @@ def main() -> None:
     )
 
     if args.command == "llm-export":
-        paths = export(episodes, split, items, run_dir, args.n_recent, args.batch_size)
-        print(f"wrote {len(paths)} prompt batches to {run_dir}/; answer each in responses-NN.json")
+        kind, paths = export(episodes, split, prompters[0], args.batch_size)
+        if kind == "memo":
+            print(f"wrote {len(paths)} memo prompt batches to {memo_dir}/; answer each in memos-NN.json, then rerun")
+        else:
+            print(f"wrote {len(paths)} prompt batches to {prompters[0].run_dir}/; answer each in responses-NN.json")
         return
 
     predictors = [Random(seed=args.seed), Popularity(), NewestRelease(items), ItemKNN()]
-    if args.command == "llm-eval":
-        agent = OfflineAgent(items, run_dir, args.n_recent)
-        predictors.append(agent)
+    agents = [OfflineAgent(p) for p in prompters] if args.command == "llm-eval" else []
     results = {}
-    for predictor in predictors:
+    for predictor in predictors + agents:
         start = time.perf_counter()
         results[predictor.name] = evaluate(predictor, split, episodes)
         results[predictor.name].summary["seconds"] = time.perf_counter() - start
-    print_results(results, reference="popularity")
-    if args.command == "llm-eval":
+    print_results(results, reference=args.reference if args.command == "llm-eval" else "popularity")
+    for agent in agents:
+        decision, total = agent.tokens_per_decision()
         print(
-            f"\n{agent.name}: {agent.unparsed} unparsed of {len(episodes)}, "
-            f"~{agent.tokens_per_decision:,.0f} prompt tokens per decision (chars / 4)"
+            f"\n{agent.name}: {agent.unparsed} unparsed of {len(episodes)}, ~{decision:,.0f} tokens per decision"
+            + (f" (~{total:,.0f} including writing the memo)" if agent.prompter.uses_memo else "")
+            + " (chars / 4)"
         )
 
 
