@@ -63,6 +63,20 @@ uv run user-sim eval --negatives uniform --slate-size 10
 uv run pytest
 ```
 
+The LLM agent runs offline: `llm-export` writes prompts for a fixed subset of episodes
+(one per user, no labels) to `data/llm/<split>-last<N>/prompts-NN.md`; the LLM answers
+each batch in a `responses-NN.json` mapping prompt key to `{"A": p, ...}`; `llm-eval`
+scores those answers next to the baselines on the same subset.
+
+```bash
+uv run user-sim llm-export --split test        # 300 episodes, last 20 ratings per prompt
+uv run user-sim llm-eval --split test
+```
+
+Each answer is keyed by a hash of the episode and the exact prompt, so editing the prompt
+invalidates old answers. Users listed in `<run dir>/excluded_users.txt` are dropped from
+the subset (see the step-4 notes below).
+
 Datasets download to `data/raw/` on first use (git-ignored).
 
 ## Baselines (ml-1m test split, default settings, seed 0)
@@ -73,9 +87,11 @@ Datasets download to `data/raw/` on first use (git-ignored).
 |------------|------------|-------|-------|-------|
 | popularity | random     | 0.201 | 0.500 | 0.499 |
 | popularity | popularity | 0.293 | 0.565 | 0.564 |
+| popularity | newest_release | 0.456 | 0.659 | 0.659 |
 | popularity | item_knn   | 0.298 | 0.561 | 0.549 |
 | uniform    | random     | 0.199 | 0.498 | 0.498 |
 | uniform    | popularity | 0.620 | 0.835 | 0.832 |
+| uniform    | newest_release | 0.440 | 0.642 | 0.642 |
 | uniform    | item_knn   | 0.580 | 0.815 | 0.795 |
 
 Observations so far:
@@ -90,8 +106,42 @@ Observations so far:
 - Recency dominates: the median gap between an episode and the user's previous
   interaction is 0 days, and kNN gets worse with every extra slice of history. That's a
   context-engineering result before any LLM is involved: more history is not more signal.
+- **The popularity-matched benchmark leaks release recency.** `newest_release` (score =
+  release year, no parameters) beats every other baseline with popularity negatives:
+  negatives are weighted by *pre-cutoff* rating counts, so films that came out around
+  the cutoff are almost never negatives, and "the newest film on the slate" is usually
+  the answer. Any simulator has to be compared against it, not just against popularity.
 - `ml-latest-small` yields only ~130 episodes under a global cutoff (most users rate in
   a single burst), so it's for smoke tests only.
+
+## LLM agent (step 4, test split)
+
+Claude (Opus 5.5, in a Claude Code session, no API) answered all 293 prompts of the test
+subset: the user's last 20 ratings (title, year, genres, stars) and the 5-movie slate.
+One fixed prompt, not tuned; 0 unparsed answers; ~421 prompt tokens per decision.
+
+| predictor      | hit@1 [95% CI]        | gauc [95% CI]         | log_loss | ece   |
+|----------------|-----------------------|-----------------------|----------|-------|
+| random         | 0.235 [0.188, 0.283]  | 0.515 [0.474, 0.558]  |          |       |
+| popularity     | 0.280 [0.229, 0.331]  | 0.565 [0.523, 0.610]  |          |       |
+| item_knn       | 0.287 [0.232, 0.338]  | 0.540 [0.497, 0.584]  |          |       |
+| newest_release | 0.487 [0.432, 0.544]  | 0.683 [0.639, 0.726]  |          |       |
+| llm_agent      | 0.489 [0.435, 0.544]  | 0.733 [0.698, 0.767]  | 0.446    | 0.068 |
+
+Paired against `newest_release`: hit@1 +0.001 [−0.066, +0.073], gauc +0.049
+[0.000, +0.102]. The agent beats popularity and kNN by ~0.2 hit@1, but almost all of
+that is the release-recency leak above; on ranking the full slate it is at best slightly
+better. A constant 0.2 would score log-loss 0.500, so its probabilities carry some signal
+and are reasonably calibrated.
+
+How the subset was built, and what it excludes:
+
+- One episode per user. A user's later prompt contains their earlier answer in its
+  history, so two episodes of the same user side by side leak it.
+- 7 users (`data/llm/test-last20/excluded_users.txt`) were dropped because their later
+  prompts had already been read while an earlier, leaky export was being answered.
+- Same model answering as wrote the code: it saw only aggregate baseline numbers on test
+  before answering, never per-episode labels.
 
 ## Caveats
 
@@ -107,7 +157,8 @@ Observations so far:
 ```
 src/user_simulation/
   data/        MovieLens loader, temporal split, episode + negative sampling
-  baselines/   random, popularity, item-kNN
+  baselines/   random, popularity, newest-release, item-kNN
+  agent.py     offline LLM agent: prompt export, answer cache, Predictor
   eval/        metrics and the evaluate() runner
   predictor.py the Predictor protocol every simulator (incl. the LLM agent) implements
 ```

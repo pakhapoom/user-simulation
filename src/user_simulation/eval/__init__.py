@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from user_simulation.data.split import Split
+from user_simulation.data.split import Episode, Split
 from user_simulation.eval.metrics import bootstrap_ci, slate_metrics, summarize
 from user_simulation.predictor import Predictor
 
@@ -20,10 +20,12 @@ class Evaluation:
     per_slate: pd.DataFrame  # one row per episode: episode_id, user_id and the slate metrics
 
 
-def evaluate(predictor: Predictor, split: Split) -> Evaluation:
+def evaluate(predictor: Predictor, split: Split, episodes: list[Episode] | None = None) -> Evaluation:
+    """Score `episodes` (default: all of the split's)."""
+    episodes = split.episodes if episodes is None else episodes
     predictor.fit(split.train)
     per_slate, all_scores, all_labels = [], [], []
-    for episode in split.episodes:
+    for episode in episodes:
         history = split.history(episode.user_id, episode.timestamp)
         scores = np.asarray(predictor.score(episode, history), dtype=float)
         labels = np.asarray(episode.labels)
@@ -36,6 +38,6 @@ def evaluate(predictor: Predictor, split: Split) -> Evaluation:
         per_slate, np.concatenate(all_scores), np.concatenate(all_labels), predictor.probabilistic
     )
     ids = pd.DataFrame(
-        {"episode_id": [e.episode_id for e in split.episodes], "user_id": [e.user_id for e in split.episodes]}
+        {"episode_id": [e.episode_id for e in episodes], "user_id": [e.user_id for e in episodes]}
     )
     return Evaluation(summary, pd.concat([ids, pd.DataFrame(per_slate)], axis=1))

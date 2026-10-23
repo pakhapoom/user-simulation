@@ -36,6 +36,24 @@ class Popularity:
         return self._counts.reindex(list(episode.candidates), fill_value=0).to_numpy(float)
 
 
+class NewestRelease:
+    """Score = release year. Popularity-matched negatives are drawn from pre-cutoff counts,
+    so recent releases are rarely negatives; this baseline measures how much that alone
+    gives away."""
+
+    name = "newest_release"
+    probabilistic = False
+
+    def __init__(self, items: pd.DataFrame):
+        self._year = items.set_index("item_id")["year"].astype(float)
+
+    def fit(self, train: pd.DataFrame) -> None:
+        pass
+
+    def score(self, episode: Episode, history: pd.DataFrame) -> np.ndarray:
+        return self._year.reindex(list(episode.candidates)).fillna(0).to_numpy()
+
+
 class ItemKNN:
     """Sum of cosine similarities between a candidate and the user's recent items.
 
