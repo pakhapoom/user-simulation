@@ -12,7 +12,7 @@ flowchart LR
     B --> C["Episodes<br/>history + slate of candidates"]
     C --> D{"Predictor"}
     D --> D1["Baselines<br/>random, popularity, item-kNN"]
-    D --> D2["LLM agent<br/>planned"]
+    D --> D2["LLM agent<br/>4 context strategies"]
     D1 --> E["Metrics<br/>hit@1, gauc, auc, calibration"]
     D2 --> E
     E --> F["Compare: accuracy,<br/>calibration, cost per decision"]
@@ -62,20 +62,29 @@ difference.
 
 ```bash
 uv sync
-uv run user-sim eval                                    # validation split: ml-1m, slate of 5, popularity negatives
+uv run user-sim eval                                    # validation split: ml-1m, slate of 5, matched negatives
 uv run user-sim eval --split test                       # test split: only for reporting final numbers
 uv run user-sim eval --negatives uniform --slate-size 10
 uv run pytest
 ```
 
 The LLM agent runs offline: `llm-export` writes prompts for a fixed subset of episodes
-(one per user, no labels) to `data/llm/<split>-last<N>/prompts-NN.md`; the LLM answers
-each batch in a `responses-NN.json` mapping prompt key to `{"A": p, ...}`; `llm-eval`
-scores those answers next to the baselines on the same subset.
+(one per user, no labels) to `data/llm/<split>-<negatives>-<context>/prompts-NN.md`; the
+LLM answers each batch in a `responses-NN.json` mapping prompt key to `{"A": p, ...}`;
+`llm-eval` scores those answers next to the baselines on the same subset.
+
+`--context` picks what the prompt shows about the user: `recent` (last `--n-recent`
+ratings, default 20), `full` (every rating), `memo` (a profile of at most 120 words) or
+`memo-tools` (the profile plus lookup tools). For the memo contexts, the first
+`llm-export` writes memo prompts (history only, no slate) to
+`data/llm/<split>-<negatives>-memo/memo-prompts-NN.md`. They are answered in
+`memos-NN.json`, and a second `llm-export` then writes the decision prompts. Tools are
+answered by `python -m user_simulation.tools`, from per-episode data written at export
+time, and every call is logged so its output counts towards tokens.
 
 ```bash
-uv run user-sim llm-export --split test        # 300 episodes, last 20 ratings per prompt
-uv run user-sim llm-eval --split test
+uv run user-sim llm-export --split test --context full     # 300 episodes
+uv run user-sim llm-eval --split test --context recent full memo memo-tools --reference llm_recent
 ```
 
 Each answer is keyed by a hash of the episode and the exact prompt, so editing the prompt
@@ -151,6 +160,75 @@ How the subset was built, and what it excludes:
 - Same model answering as wrote the code: it saw only aggregate baseline numbers on test
   before answering, never per-episode labels.
 
+## Context-engineering ablation (step 5, test split, matched negatives)
+
+The agent is the same throughout, and so are the 300 test episodes (one per user) and the
+instructions; only what it is shown about the user changes. Each strategy was answered by
+fresh Claude (Opus 5.5) subagents. They were told to read only their batch files and,
+for `memo-tools`, to run only the lookup command. They never saw labels, other
+strategies' prompts or answers. Every strategy got 0 unparsed answers.
+
+| predictor      | hit@1 [95% CI]       | gauc [95% CI]        | log_loss | ece   | tokens / decision | incl. memo |
+|----------------|----------------------|----------------------|----------|-------|-------------------|------------|
+| random         | 0.207 [0.160, 0.253] | 0.488 [0.449, 0.528] |          |       |                   |            |
+| newest_release | 0.200                | 0.500                |          |       |                   |            |
+| popularity     | 0.370 [0.317, 0.423] | 0.629 [0.590, 0.671] |          |       |                   |            |
+| item_knn       | 0.410 [0.353, 0.467] | 0.652 [0.612, 0.693] |          |       |                   |            |
+| llm_recent     | 0.451 [0.400, 0.504] | 0.706 [0.669, 0.742] | 0.454    | 0.052 | ~419              |            |
+| llm_full       | 0.513 [0.460, 0.567] | 0.758 [0.723, 0.790] | 0.425    | 0.061 | ~3,002            |            |
+| llm_memo       | 0.487 [0.431, 0.541] | 0.738 [0.704, 0.772] | 0.423    | 0.046 | ~351              | ~3,448     |
+| llm_memo-tools | 0.474 [0.419, 0.526] | 0.737 [0.700, 0.771] | 0.440    | 0.060 | ~617              | ~3,714     |
+
+Paired differences (bootstrap over users, * = interval excludes 0):
+
+| comparison              | hit@1                     | gauc                      |
+|-------------------------|---------------------------|---------------------------|
+| recent − popularity     | +0.081 [+0.023, +0.137] * | +0.077 [+0.037, +0.115] * |
+| recent − item_knn       | +0.041 [−0.014, +0.094]   | +0.054 [+0.020, +0.087] * |
+| full − recent           | +0.063 [+0.022, +0.106] * | +0.052 [+0.028, +0.077] * |
+| memo − recent           | +0.037 [−0.006, +0.079]   | +0.033 [+0.006, +0.059] * |
+| memo-tools − recent     | +0.023 [−0.017, +0.062]   | +0.031 [+0.007, +0.056] * |
+| full − memo             | +0.026 [−0.014, +0.068]   | +0.020 [−0.002, +0.042]   |
+| full − memo-tools       | +0.039 [+0.001, +0.081] * | +0.021 [+0.001, +0.043] * |
+| memo-tools − memo       | −0.013 [−0.046, +0.019]   | −0.002 [−0.020, +0.016]   |
+
+What it shows:
+
+- Once release recency is matched away, every LLM context beats popularity, and on gauc
+  it beats item-kNN too. The 20-rating prompt alone is +0.08 hit@1 over popularity.
+- Unlike kNN, the LLM gains from more history. The full history is the best strategy, by
+  +0.06 hit@1 over the last 20 ratings, but it costs ~7× the tokens per decision.
+- The memo keeps most of that gain at decision time: about 60% of the hit@1 gap between
+  recent and full, and its gauc is within 0.02 of full. It is the cheapest prompt
+  (~351 tokens) and the best calibrated (ece 0.046). Writing the memo reads the full
+  history once, though, so the first decision costs about as much as `full`. The memo
+  pays off only when it is reused across many decisions; here each user has one.
+- Tools added nothing over the memo alone (−0.013 hit@1, interval spans 0) and nearly
+  doubled decision tokens. The agents used them unevenly: 335 calls, on 141 of the 300
+  episodes (233 `item_details`, 95 `recent_history`, 7 `similar_in_history`). By
+  answering agent, 60 episodes each, against the memo-only answers on the same episodes:
+  - the agent that looked up `item_details` on most slates, using pre-cutoff rating
+    counts as a popularity cue: 0.483 vs 0.531 hit@1;
+  - the agent that called `recent_history` on all 60 episodes: 0.517 vs 0.511;
+  - the rest, with few lookups: within ±0.01.
+
+  Popularity is a weak cue here because negatives are already drawn in proportion to
+  recent popularity. The samples are small, but nothing suggests that tool access, as
+  these agents used it, helps.
+
+Caveats:
+
+- Subagents were instructed, not sandboxed. Their reports say they followed the rules,
+  apart from chaining several lookup commands into one shell call.
+- Tokens are prompt characters / 4, plus tool output, not API usage. Reasoning tokens and
+  answer tokens are not counted.
+- Every strategy was answered by a different set of agents: fresh agents per strategy,
+  2–5 per strategy. So part of a difference may be agent variance rather than context.
+  The per-agent spread above (±0.05 hit@1 on 60 episodes) is of the same order as the
+  gaps between strategies.
+- 11 of the 300 memos run slightly over the 120-word limit (max 125 words).
+- One model family wrote the code, the memos and the answers.
+
 ## Caveats
 
 - MovieLens records *ratings*, not impressions. "Rated" stands in for "watched", and
@@ -166,7 +244,8 @@ How the subset was built, and what it excludes:
 src/user_simulation/
   data/        MovieLens loader, temporal split, episode + negative sampling
   baselines/   random, popularity, newest-release, item-kNN
-  agent.py     offline LLM agent: prompt export, answer cache, Predictor
+  agent.py     offline LLM agent: context strategies, prompt export, answer cache, Predictor
+  tools.py     lookup tools for the memo-tools context (per-episode data + CLI)
   eval/        metrics and the evaluate() runner
   predictor.py the Predictor protocol every simulator (incl. the LLM agent) implements
 ```
