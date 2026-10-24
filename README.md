@@ -4,6 +4,40 @@ An experiment in building an LLM agent that simulates a user's decision — e.g.
 everything this user has done up until now, will they click/watch this movie?* — and
 measuring whether it actually predicts real behavior better than classic recommenders.
 
+## Results
+
+The full write-up, in plain language with figures, is in [docs/report.md](docs/report.md).
+Its summary:
+
+1. **Our first test was broken, and the LLM exposed it.** A one-line rule, "pick the
+   newest film", matched the LLM's score. We rebuilt the test so that rule scores no better
+   than chance.
+2. **On the fair test, the LLM beats classic recommenders.** It picks the right film
+   45–51% of the time, against 37% for "pick the most popular" and 41% for a standard
+   recommender. Guessing scores 20%.
+3. **More history helps the LLM.** Reading a person's whole history beats reading their
+   last 20 ratings. The classic recommender gets worse with more history.
+4. **A 120-word profile keeps most of that gain** at about an eighth of the reading cost
+   per decision. Giving the LLM lookup tools added nothing.
+
+![hit@1 with 95% intervals for every predictor](docs/figures/results.svg)
+
+300 test decisions (one per user), matched negatives; LLM answers from Claude (Opus 5.5)
+subagents, no API:
+
+| predictor | hit@1 | gauc | log loss | ece | tokens / decision | incl. writing memo |
+|---|---:|---:|---:|---:|---:|---:|
+| random | 0.207 | 0.488 | | | | |
+| newest film | 0.200 | 0.500 | | | | |
+| popularity | 0.370 | 0.629 | | | | |
+| item-kNN | 0.410 | 0.652 | | | | |
+| LLM · last 20 | 0.451 | 0.706 | 0.454 | 0.052 | ~419 | |
+| LLM · full history | **0.513** | **0.758** | 0.425 | 0.061 | ~3,002 | |
+| LLM · memo | 0.487 | 0.738 | **0.423** | **0.046** | **~351** | ~3,448 |
+| LLM · memo + tools | 0.474 | 0.737 | 0.440 | 0.060 | ~617 | ~3,714 |
+
+Paired comparisons, the release-year leak we found and fixed, per-agent tool use and the limits are in the report.
+
 ## Workflow
 
 ```mermaid
@@ -89,7 +123,7 @@ uv run user-sim llm-eval --split test --context recent full memo memo-tools --re
 
 Each answer is keyed by a hash of the episode and the exact prompt, so editing the prompt
 invalidates old answers. Users listed in `<run dir>/excluded_users.txt` are dropped from
-the subset (see the step-4 notes below).
+the subset (see [How the experiment was kept honest](docs/report.md#how-the-experiment-was-kept-honest)).
 
 Datasets download to `data/raw/` on first use (git-ignored).
 
@@ -130,105 +164,6 @@ Observations so far:
 - `ml-latest-small` yields only ~130 episodes under a global cutoff (most users rate in
   a single burst), so it's for smoke tests only.
 
-## LLM agent, first run (step 4, test split, popularity negatives)
-
-Claude (Opus 5.5, in a Claude Code session, no API) answered all 293 prompts of the test
-subset: the user's last 20 ratings (title, year, genres, stars) and the 5-movie slate.
-One fixed prompt, not tuned; 0 unparsed answers; ~421 prompt tokens per decision.
-
-| predictor      | hit@1 [95% CI]        | gauc [95% CI]         | log_loss | ece   |
-|----------------|-----------------------|-----------------------|----------|-------|
-| random         | 0.235 [0.188, 0.283]  | 0.515 [0.474, 0.558]  |          |       |
-| popularity     | 0.280 [0.229, 0.331]  | 0.565 [0.523, 0.610]  |          |       |
-| item_knn       | 0.287 [0.232, 0.338]  | 0.540 [0.497, 0.584]  |          |       |
-| newest_release | 0.487 [0.432, 0.544]  | 0.683 [0.639, 0.726]  |          |       |
-| llm_agent      | 0.489 [0.435, 0.544]  | 0.733 [0.698, 0.767]  | 0.446    | 0.068 |
-
-This run used the old popularity negatives and is what exposed the leak; the
-step-5 runs below use matched negatives. Paired against `newest_release`: hit@1 +0.001 [−0.066, +0.073], gauc +0.049
-[0.000, +0.102]. The agent beats popularity and kNN by ~0.2 hit@1, but almost all of
-that is the release-recency leak above; on ranking the full slate it is at best slightly
-better. A constant 0.2 would score log-loss 0.500, so its probabilities carry some signal
-and are reasonably calibrated.
-
-How the subset was built, and what it excludes:
-
-- One episode per user. A user's later prompt contains their earlier answer in its
-  history, so two episodes of the same user side by side leak it.
-- 7 users (`excluded_users.txt` in that run directory) were dropped because their later
-  prompts had already been read while an earlier, leaky export was being answered.
-- Same model answering as wrote the code: it saw only aggregate baseline numbers on test
-  before answering, never per-episode labels.
-
-## Context-engineering ablation (step 5, test split, matched negatives)
-
-The agent is the same throughout, and so are the 300 test episodes (one per user) and the
-instructions; only what it is shown about the user changes. Each strategy was answered by
-fresh Claude (Opus 5.5) subagents. They were told to read only their batch files and,
-for `memo-tools`, to run only the lookup command. They never saw labels, other
-strategies' prompts or answers. Every strategy got 0 unparsed answers.
-
-| predictor      | hit@1 [95% CI]       | gauc [95% CI]        | log_loss | ece   | tokens / decision | incl. memo |
-|----------------|----------------------|----------------------|----------|-------|-------------------|------------|
-| random         | 0.207 [0.160, 0.253] | 0.488 [0.449, 0.528] |          |       |                   |            |
-| newest_release | 0.200                | 0.500                |          |       |                   |            |
-| popularity     | 0.370 [0.317, 0.423] | 0.629 [0.590, 0.671] |          |       |                   |            |
-| item_knn       | 0.410 [0.353, 0.467] | 0.652 [0.612, 0.693] |          |       |                   |            |
-| llm_recent     | 0.451 [0.400, 0.504] | 0.706 [0.669, 0.742] | 0.454    | 0.052 | ~419              |            |
-| llm_full       | 0.513 [0.460, 0.567] | 0.758 [0.723, 0.790] | 0.425    | 0.061 | ~3,002            |            |
-| llm_memo       | 0.487 [0.431, 0.541] | 0.738 [0.704, 0.772] | 0.423    | 0.046 | ~351              | ~3,448     |
-| llm_memo-tools | 0.474 [0.419, 0.526] | 0.737 [0.700, 0.771] | 0.440    | 0.060 | ~617              | ~3,714     |
-
-Paired differences (bootstrap over users, * = interval excludes 0):
-
-| comparison              | hit@1                     | gauc                      |
-|-------------------------|---------------------------|---------------------------|
-| recent − popularity     | +0.081 [+0.023, +0.137] * | +0.077 [+0.037, +0.115] * |
-| recent − item_knn       | +0.041 [−0.014, +0.094]   | +0.054 [+0.020, +0.087] * |
-| full − recent           | +0.063 [+0.022, +0.106] * | +0.052 [+0.028, +0.077] * |
-| memo − recent           | +0.037 [−0.006, +0.079]   | +0.033 [+0.006, +0.059] * |
-| memo-tools − recent     | +0.023 [−0.017, +0.062]   | +0.031 [+0.007, +0.056] * |
-| full − memo             | +0.026 [−0.014, +0.068]   | +0.020 [−0.002, +0.042]   |
-| full − memo-tools       | +0.039 [+0.001, +0.081] * | +0.021 [+0.001, +0.043] * |
-| memo-tools − memo       | −0.013 [−0.046, +0.019]   | −0.002 [−0.020, +0.016]   |
-
-What it shows:
-
-- Once release recency is matched away, every LLM context beats popularity, and on gauc
-  it beats item-kNN too. The 20-rating prompt alone is +0.08 hit@1 over popularity.
-- Unlike kNN, the LLM gains from more history. The full history is the best strategy, by
-  +0.06 hit@1 over the last 20 ratings, but it costs ~7× the tokens per decision.
-- The memo keeps most of that gain at decision time: about 60% of the hit@1 gap between
-  recent and full, and its gauc is within 0.02 of full. It is the cheapest prompt
-  (~351 tokens) and the best calibrated (ece 0.046). Writing the memo reads the full
-  history once, though, so the first decision costs about as much as `full`. The memo
-  pays off only when it is reused across many decisions; here each user has one.
-- Tools added nothing over the memo alone (−0.013 hit@1, interval spans 0) and nearly
-  doubled decision tokens. The agents used them unevenly: 335 calls, on 141 of the 300
-  episodes (233 `item_details`, 95 `recent_history`, 7 `similar_in_history`). By
-  answering agent, 60 episodes each, against the memo-only answers on the same episodes:
-  - the agent that looked up `item_details` on most slates, using pre-cutoff rating
-    counts as a popularity cue: 0.483 vs 0.531 hit@1;
-  - the agent that called `recent_history` on all 60 episodes: 0.517 vs 0.511;
-  - the rest, with few lookups: within ±0.01.
-
-  Popularity is a weak cue here because negatives are already drawn in proportion to
-  recent popularity. The samples are small, but nothing suggests that tool access, as
-  these agents used it, helps.
-
-Caveats:
-
-- Subagents were instructed, not sandboxed. Their reports say they followed the rules,
-  apart from chaining several lookup commands into one shell call.
-- Tokens are prompt characters / 4, plus tool output, not API usage. Reasoning tokens and
-  answer tokens are not counted.
-- Every strategy was answered by a different set of agents: fresh agents per strategy,
-  2–5 per strategy. So part of a difference may be agent variance rather than context.
-  The per-agent spread above (±0.05 hit@1 on 60 episodes) is of the same order as the
-  gaps between strategies.
-- 11 of the 300 memos run slightly over the 120-word limit (max 125 words).
-- One model family wrote the code, the memos and the answers.
-
 ## Caveats
 
 - MovieLens records *ratings*, not impressions. "Rated" stands in for "watched", and
@@ -248,4 +183,7 @@ src/user_simulation/
   tools.py     lookup tools for the memo-tools context (per-episode data + CLI)
   eval/        metrics and the evaluate() runner
   predictor.py the Predictor protocol every simulator (incl. the LLM agent) implements
+docs/
+  report.md    plain-language write-up of the experiment and its results
+  figures/     the report's SVG figures and the script that draws them
 ```
