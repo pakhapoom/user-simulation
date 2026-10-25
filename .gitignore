@@ -11,3 +11,6 @@ wheels/
 
 # Datasets
 /data/
+
+# Secrets
+.env
