@@ -11,6 +11,11 @@ dependencies = [
     "scipy>=1.18.1",
 ]
 
+[project.optional-dependencies]
+laya = [
+    "laya>=0.4.15",
+]
+
 [project.scripts]
 user-sim = "user_simulation.cli:main"
 

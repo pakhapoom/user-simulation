@@ -2,7 +2,8 @@
 
 `eval` scores the baselines. `llm-export` writes prompts for the offline LLM agent on a
 fixed subset of episodes, and `llm-eval` scores its answers (one or more contexts) next to
-the baselines on that same subset."""
+the baselines on that same subset. `laya-eval` runs the Laya decision model locally on the
+same subset and contexts."""
 
 from __future__ import annotations
 
@@ -63,6 +64,13 @@ def main() -> None:
         "llm-eval", parents=[split_args, llm_args], help="score the LLM agent's answers vs baselines"
     )
     eval_cmd.add_argument("--reference", default="popularity", help="predictor for paired differences")
+    laya_cmd = commands.add_parser(
+        "laya-eval", parents=[split_args, llm_args], help="score the Laya decision model vs baselines"
+    )
+    laya_cmd.add_argument("--checkpoint", choices=["english", "multilingual"], nargs="+", default=["multilingual"])
+    laya_cmd.add_argument("--max-len", type=int, help="token budget per decision; default: the checkpoint's")
+    laya_cmd.add_argument("--device", help="torch device; default: Laya picks one")
+    laya_cmd.add_argument("--reference", default="popularity", help="predictor for paired differences")
     args = parser.parse_args()
     if args.command != "eval" and args.run_dir and len(args.context) > 1:
         parser.error("--run-dir needs a single --context")
@@ -111,12 +119,28 @@ def main() -> None:
 
     predictors = [Random(seed=args.seed), Popularity(), NewestRelease(items), ItemKNN()]
     agents = [OfflineAgent(p) for p in prompters] if args.command == "llm-eval" else []
+    if args.command == "laya-eval":
+        from user_simulation import laya_agent
+
+        if bad := [p.context for p in prompters if p.context not in laya_agent.CONTEXTS]:
+            parser.error(f"laya-eval has no context {bad[0]!r}; use {', '.join(laya_agent.CONTEXTS)}")
+        for checkpoint in args.checkpoint:
+            model = laya_agent.load(checkpoint, args.device)
+            agents += [laya_agent.LayaAgent(p, model, checkpoint, args.max_len) for p in prompters]
     results = {}
     for predictor in predictors + agents:
         start = time.perf_counter()
         results[predictor.name] = evaluate(predictor, split, episodes)
         results[predictor.name].summary["seconds"] = time.perf_counter() - start
-    print_results(results, reference=args.reference if args.command == "llm-eval" else "popularity")
+    print_results(results, reference=args.reference if args.command != "eval" else "popularity")
+    if args.command == "laya-eval":
+        for agent in agents:
+            print(
+                f"\n{agent.name}: {agent.unparsed} unparsed of {len(episodes)}, {agent.cut} histories cut to fit, "
+                f"{agent.overflow} still truncated, {agent.tokens_per_decision():,.0f} tokens per decision, "
+                f"{results[agent.name].summary['seconds'] / len(episodes):.2f} s per decision"
+            )
+        return
     for agent in agents:
         decision, total = agent.tokens_per_decision()
         print(
