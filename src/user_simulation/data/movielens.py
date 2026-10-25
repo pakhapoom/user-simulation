@@ -7,6 +7,7 @@ items:        item_id, title, year, genres (list[str]).
 from __future__ import annotations
 
 import io
+import ssl
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -19,6 +20,28 @@ DATASETS = {
 }
 DEFAULT_DATA_DIR = Path("data/raw")
 
+# files.grouplens.org chains to this root, which Mozilla-derived stores (certifi,
+# Debian/Ubuntu ca-certificates, so Colab) lack. It is trusted on top of the
+# system store for these downloads only.
+# SHA-256 86:A1:EC:BA:08:9C:4A:8D:3B:BE:27:34:C6:12:BA:34:1D:81:3E:04:3C:F9:E8:A8:62:CD:5C:57:A3:6B:BE:6B
+EMSIGN_ECC_ROOT_CA_G3 = """\
+-----BEGIN CERTIFICATE-----
+MIICTjCCAdOgAwIBAgIKPPYHqWhwDtqLhDAKBggqhkjOPQQDAzBrMQswCQYDVQQG
+EwJJTjETMBEGA1UECxMKZW1TaWduIFBLSTElMCMGA1UEChMcZU11ZGhyYSBUZWNo
+bm9sb2dpZXMgTGltaXRlZDEgMB4GA1UEAxMXZW1TaWduIEVDQyBSb290IENBIC0g
+RzMwHhcNMTgwMjE4MTgzMDAwWhcNNDMwMjE4MTgzMDAwWjBrMQswCQYDVQQGEwJJ
+TjETMBEGA1UECxMKZW1TaWduIFBLSTElMCMGA1UEChMcZU11ZGhyYSBUZWNobm9s
+b2dpZXMgTGltaXRlZDEgMB4GA1UEAxMXZW1TaWduIEVDQyBSb290IENBIC0gRzMw
+djAQBgcqhkjOPQIBBgUrgQQAIgNiAAQjpQy4LRL1KPOxst3iAhKAnjlfSU2fySU0
+WXTsuwYc58Byr+iuL+FBVIcUqEqy6HyC5ltqtdyzdc6LBtCGI79G1Y4PPwT01xyS
+fvalY8L1X44uT6EYGQIrMgqCZH0Wk9GjQjBAMB0GA1UdDgQWBBR8XQKEE9TMipuB
+zhccLikenEhjQjAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAKBggq
+hkjOPQQDAwNpADBmAjEAvvNhzwIQHWSVB7gYboiFBS+DCBeQyh+KTOgNG3qxrdWB
+CUfvO6wIBHxcmbHtRwfSAjEAnbpV/KlK6O3t5nYBQnvI+GDZjVGLVTv7jHvrZQnD
++JbNR6iC8hZVdyR+EhCVBCyj
+-----END CERTIFICATE-----
+"""
+
 
 def download(name: str, data_dir: Path = DEFAULT_DATA_DIR) -> Path:
     """Fetch and unzip a dataset once; later calls reuse the extracted folder."""
@@ -28,7 +51,9 @@ def download(name: str, data_dir: Path = DEFAULT_DATA_DIR) -> Path:
     if target.exists():
         return target
     data_dir.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(DATASETS[name]) as response:
+    context = ssl.create_default_context()
+    context.load_verify_locations(cadata=EMSIGN_ECC_ROOT_CA_G3)
+    with urllib.request.urlopen(DATASETS[name], context=context) as response:
         payload = response.read()
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         archive.extractall(data_dir)
