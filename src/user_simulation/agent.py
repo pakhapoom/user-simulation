@@ -132,22 +132,30 @@ class Prompter:
         )
         return _key(episode.episode_id, MEMO_INSTRUCTIONS, text), text
 
+    def recent_state(self, episode: Episode, recent: pd.DataFrame) -> list[str]:
+        """The `recent` context's view of the user, for ratings already cut to the last few."""
+        return [f"Today is {_today(episode)}. The user's last {len(recent)} ratings, oldest first:", *self._ratings(recent)]
+
+    def state(self, episode: Episode, history: pd.DataFrame) -> list[str] | None:
+        """What the decision prompt shows about the user, before the slate, or None while its
+        memo is still missing."""
+        if self.context == "recent":
+            return self.recent_state(episode, history.tail(self.n_recent))
+        if self.context == "full":
+            return [f"Today is {_today(episode)}. The user's {len(history)} ratings so far, oldest first:", *self._ratings(history)]
+        memo = self.memos.get(self.memo_prompt(episode, history)[0])
+        if memo is None:
+            return None
+        lines = [f"Today is {_today(episode)}. Profile of the user:", memo.strip()]
+        if self.context == "memo-tools":
+            lines.append(f"Episode id for lookups: {episode.episode_id}")
+        return lines
+
     def prompt(self, episode: Episode, history: pd.DataFrame) -> tuple[str, str] | None:
         """(key, text) of the decision prompt, or None while its memo is still missing."""
-        if self.context == "recent":
-            recent = history.tail(self.n_recent)
-            lines = [f"Today is {_today(episode)}. The user's last {len(recent)} ratings, oldest first:"]
-            lines += self._ratings(recent)
-        elif self.context == "full":
-            lines = [f"Today is {_today(episode)}. The user's {len(history)} ratings so far, oldest first:"]
-            lines += self._ratings(history)
-        else:
-            memo = self.memos.get(self.memo_prompt(episode, history)[0])
-            if memo is None:
-                return None
-            lines = [f"Today is {_today(episode)}. Profile of the user:", memo.strip()]
-            if self.context == "memo-tools":
-                lines.append(f"Episode id for lookups: {episode.episode_id}")
+        lines = self.state(episode, history)
+        if lines is None:
+            return None
         lines.append("Candidates:")
         lines += [f"{LETTERS[i]}. {describe(c, self.items)}" for i, c in enumerate(episode.candidates)]
         text = "\n".join(lines)
