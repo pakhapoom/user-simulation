@@ -3,7 +3,7 @@
 `eval` scores the baselines. `llm-export` writes prompts for the offline LLM agent on a
 fixed subset of episodes, and `llm-eval` scores its answers (one or more contexts) next to
 the baselines on that same subset. `laya-eval` runs the Laya decision model locally on the
-same subset and contexts."""
+same subset and contexts, and `laya-export` writes training rows for fine-tuning it."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from user_simulation.agent import (
     sample_episodes,
 )
 from user_simulation.baselines import ItemKNN, NewestRelease, Popularity, Random
-from user_simulation.data import DATASETS, SplitConfig, load, make_split, make_validation_split
+from user_simulation.data import DATASETS, SplitConfig, load, make_split, make_training_splits, make_validation_split
 from user_simulation.eval import Evaluation, bootstrap_ci, evaluate
 
 
@@ -67,11 +67,25 @@ def main() -> None:
     laya_cmd = commands.add_parser(
         "laya-eval", parents=[split_args, llm_args], help="score the Laya decision model vs baselines"
     )
-    laya_cmd.add_argument("--checkpoint", choices=["english", "multilingual"], nargs="+", default=["multilingual"])
+    laya_cmd.add_argument(
+        "--checkpoint", nargs="+", default=["multilingual"],
+        help="english, multilingual, or the directory of a fine-tuned checkpoint",
+    )
     laya_cmd.add_argument("--max-len", type=int, help="token budget per decision; default: the checkpoint's")
     laya_cmd.add_argument("--device", help="torch device; default: Laya picks one")
     laya_cmd.add_argument("--reference", default="popularity", help="predictor for paired differences")
+    train_cmd = commands.add_parser(
+        "laya-export", parents=[split_args], help="write Laya fine-tuning rows from before the validation cutoff"
+    )
+    train_cmd.add_argument("--context", choices=["recent", "full"], default="full")
+    train_cmd.add_argument("--n-recent", type=int, default=20, help="history items shown by the recent context")
+    train_cmd.add_argument("--checkpoint", default="multilingual", help="the checkpoint that will be fine-tuned")
+    train_cmd.add_argument("--max-len", type=int, help="token budget per decision; default: the checkpoint's")
+    train_cmd.add_argument("--days", type=int, default=14, help="length of each training window")
+    train_cmd.add_argument("--out", type=Path, help="default: data/laya/<negatives>-<context>")
     args = parser.parse_args()
+    if args.command == "laya-export":
+        return laya_export(args)
     if args.command != "eval" and args.run_dir and len(args.context) > 1:
         parser.error("--run-dir needs a single --context")
     if args.command == "llm-export" and len(args.context) > 1:
@@ -148,6 +162,37 @@ def main() -> None:
             + (f" (~{total:,.0f} including writing the memo)" if agent.prompter.uses_memo else "")
             + " (chars / 4)"
         )
+
+
+def laya_export(args: argparse.Namespace) -> None:
+    """Training rows from rolling windows before the validation cutoff, so that neither the
+    validation nor the test episodes are ever trained on, plus the validation episodes for
+    `laya-train --eval` to report on."""
+    from user_simulation import laya_agent
+
+    interactions, items = load(args.dataset)
+    config = SplitConfig(
+        test_fraction=args.test_fraction,
+        min_history=args.min_history,
+        episodes_per_user=args.episodes_per_user,
+        slate_size=args.slate_size,
+        negative_sampling=args.negatives,
+        seed=args.seed,
+    )
+    item_years = items.set_index("item_id")["year"]
+    validation = make_validation_split(interactions, config, item_years=item_years)
+    training = make_training_splits(interactions, validation.cutoff, config, args.days, item_years=item_years)
+    name = f"{args.context}{args.n_recent}" if args.context == "recent" else args.context
+    out = args.out or Path("data/laya") / f"{args.negatives}-{name}"
+    prompter = Prompter(items, args.context, args.n_recent, out, out)
+    agent = laya_agent.LayaAgent(prompter, laya_agent.load(args.checkpoint, "cpu"), args.checkpoint, args.max_len)
+    rows = laya_agent.export_training(training, agent, out / "train.jsonl")
+    oldest = datetime.fromtimestamp(training[-1].cutoff, tz=timezone.utc).date()
+    cutoff = datetime.fromtimestamp(validation.cutoff, tz=timezone.utc).date()
+    print(f"wrote {rows:,} training rows from {len(training)} windows ({oldest} to {cutoff}), {agent.cut:,} histories cut")
+    agent.cut = 0
+    rows = laya_agent.export_training([validation], agent, out / "validation.jsonl")
+    print(f"wrote {rows:,} validation rows, {agent.cut:,} histories cut, to {out}/")
 
 
 def print_results(results: dict[str, Evaluation], reference: str, metrics=("hit@1", "gauc")) -> None:

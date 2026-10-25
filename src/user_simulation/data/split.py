@@ -79,6 +79,28 @@ def make_validation_split(
     return make_split(past, config, cutoff=test_cutoff - days * 86_400, item_years=item_years)
 
 
+def make_training_splits(
+    interactions: pd.DataFrame,
+    before: int,
+    config: SplitConfig = SplitConfig(),
+    days: int = 14,
+    item_years: pd.Series | None = None,
+) -> list[Split]:
+    """Splits of the log before `before` whose futures are back-to-back `days`-long windows,
+    newest first, until a window yields no episodes. Their episodes are training data for a
+    simulator: with `before` at the validation cutoff, nothing in them is at or after it."""
+    splits = []
+    end = before
+    while True:
+        split = make_split(
+            interactions[interactions["timestamp"] < end], config, cutoff=end - days * 86_400, item_years=item_years
+        )
+        if not split.episodes:
+            return splits
+        splits.append(split)
+        end = split.cutoff
+
+
 def make_split(
     interactions: pd.DataFrame,
     config: SplitConfig = SplitConfig(),
