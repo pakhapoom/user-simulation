@@ -2,12 +2,12 @@
   text { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: #556170; }
   .ink { fill: #141B24; } .title { fill: #141B24; font-size: 13px; font-weight: 600; }
   .grid { stroke: #DAE0E7; } .axis { stroke: #556170; } .ref { stroke: #556170; stroke-dasharray: 4 4; }
-  .bg { fill: #FFFFFF; } .base { fill: #9BA6B3; } .llm { fill: #2346C0; } .leak { fill: #C27F0E; }
+  .bg { fill: #FFFFFF; } .base { fill: #9BA6B3; } .llm { fill: #2346C0; } .tuned { fill: #12806F; } .leak { fill: #C27F0E; }
   .chance { fill: #E7EAEE; stroke: #DAE0E7; } .ci { stroke: #141B24; stroke-width: 1.6; opacity: .6; }
   .line-base { stroke: #9BA6B3; } .line-llm { stroke: #2346C0; } .hollow { fill: #FFFFFF; stroke: #2346C0; stroke-width: 2; }
   @media (prefers-color-scheme: dark) {
     text { fill: #9AA6B4; } .ink, .title { fill: #E6EAF0; } .grid { stroke: #273140; }
-    .axis, .ref { stroke: #9AA6B4; } .bg { fill: #151C25; } .base { fill: #5E6A78; } .llm { fill: #8EA5FF; }
+    .axis, .ref { stroke: #9AA6B4; } .bg { fill: #151C25; } .base { fill: #5E6A78; } .llm { fill: #8EA5FF; } .tuned { fill: #4CC2AE; }
     .leak { fill: #F0B13C; } .chance { fill: #222B36; stroke: #273140; } .ci { stroke: #E6EAF0; }
     .line-base { stroke: #5E6A78; } .line-llm { stroke: #8EA5FF; } .hollow { fill: #151C25; stroke: #8EA5FF; }
   }

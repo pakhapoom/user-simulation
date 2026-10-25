@@ -22,6 +22,10 @@ exact method; you can skip them without losing the thread.
    last 20 ratings. The classic recommender gets worse with more history.
 4. **A 120-word profile keeps most of that gain** at about an eighth of the reading cost
    per decision. Giving the LLM lookup tools added nothing.
+5. **A small model trained for the job catches up with the classic recommender, not the
+   LLM.** Off the shelf it guesses at chance. After training on 5,940 earlier decisions it
+   picks the right film 42% of the time, in a tenth of a second, with the best-calibrated
+   probabilities of any predictor.
 
 ## The question: a shelf of five films
 
@@ -355,7 +359,8 @@ We gave the LLM four ways of seeing the person:
 
 Each version answered the same 300 decisions. Every version scores above every classic
 predictor. Reading the full history does best, with the right film on top 51% of the
-time.
+time. The green bar is the small trained model from
+[A small model trained for the job](#a-small-model-trained-for-the-job).
 
 ![hit@1 with 95% intervals for every predictor](figures/results.svg)
 
@@ -429,6 +434,52 @@ Lookup counts are as reported by each agent; 335 calls were logged in all (233 p
 and genre lookups, 95 recent-rating lookups, 7 related-film lookups). Groups of 60 are
 small, so read the direction, not the exact gaps.*
 
+## A small model trained for the job
+
+An LLM is a general-purpose reader that writes out its answer. We also tried the opposite
+kind of model. [Laya](https://huggingface.co/convaiinnovations/laya) is a small decision
+model: it reads the same description of the person and the shelf, then scores the five
+films in a single pass, without writing any text. It runs on one GPU, with no API.
+
+Off the shelf, it is no better than guessing (18–20%). So we trained it on the task:
+5,940 earlier decisions, each one a person's history and a shelf, all taken from before
+the validation period, so no test decision was ever trained on. Trained, it picks the
+right film 42% of the time: level with the classic recommender, below every LLM version.
+
+| predictor | hit@1 | gauc | log loss | ece | Laya tokens / decision | seconds / decision |
+|---|---:|---:|---:|---:|---:|---:|
+| Laya off the shelf · last 20 | 0.197 | 0.509 | 0.536 | 0.083 | ~546 | 0.04 |
+| Laya off the shelf · full history | 0.183 | 0.500 | 0.530 | 0.066 | ~993 | 0.10 |
+| Laya trained · last 20 | 0.390 | 0.673 | 0.463 | **0.031** | ~546 | **0.04** |
+| Laya trained · full history | **0.417** | **0.681** | 0.463 | 0.035 | ~993 | 0.10 |
+
+*For comparison, on the same 300 decisions: popularity 0.370, item-kNN 0.410, LLM
+· last 20 0.451, LLM · full history 0.513.*
+
+Three things stand out:
+
+- **Training is what makes it work.** It goes from chance to the classic recommender's
+  level. Its ranking (gauc 0.681) is better than kNN's (0.652), but against popularity
+  the difference is still within noise: +4.7 points, interval [−3.0, +11.7].
+- **Its probabilities are the most honest of any predictor.** Calibration error is 0.031,
+  against 0.046 for the best LLM version. Training ends by fitting how confident the
+  model should be, on 400 decisions it was not trained on.
+- **"Full history" is mostly a cut-down history.** Laya reads at most about 1,000 tokens,
+  so 270 of the 300 full histories were trimmed to fit. Full still edges out the last 20
+  ratings (41.7% vs 39.0%), but that gap is within noise.
+
+**For technical readers.** The model is the `multilingual` checkpoint, fine-tuned with
+`laya-train` defaults: 4 epochs, RLCD loss (a policy-gradient term plus soft
+cross-entropy), effective batch 64, 372 optimizer updates, candidate order shuffled every
+time a row is seen. Training rows come from 14-day windows before the validation cutoff
+(2000-11-18), with the full-history context. On all 656 validation episodes, accuracy
+rose from 0.212 to 0.360 and cross-entropy fell from 1.691 to 1.546. A temperature of
+1.61 was fitted on 400 held-out training rows. Nothing was tuned yet: one seed, default
+epochs. Training loss was still falling at epoch 4 (1.40, 1.31, 1.21, 1.10 per epoch), so
+more epochs may help, to be chosen on validation. Laya's token counts come from its own
+tokenizer, so they don't compare directly with the LLM's characters ÷ 4. Times are on a
+Colab GPU.
+
 ## How sure are we?
 
 300 decisions is enough to separate big effects from noise, but not small ones. For each
@@ -443,6 +494,7 @@ plausible range of the difference excludes zero.
 | Memo vs last 20 | +3.7 pts [−0.6, +7.9] | likely (clear on ranking) |
 | Full history vs memo | +2.6 pts [−1.4, +6.8] | can't tell |
 | Memo + tools vs memo | −1.3 pts [−4.6, +1.9] | no difference |
+| Laya trained (full) vs popularity | +4.7 pts [−3.0, +11.7] | can't tell |
 
 One more source of noise: each version was answered by a different set of AI agents. On
 the same 60 decisions, two agents can differ by about 5 points, as large as some of the
@@ -465,6 +517,9 @@ error of hit@1 is about ±0.03.
   gain and is the best calibrated. It pays off when the same person faces many decisions.
 - **Tools need a reason.** Open-ended lookups cost tokens and can pull the model toward
   misleading cues. Add a tool when it answers a question the context can't.
+- **A small model needs task data.** Off the shelf, a decision model knew nothing useful
+  here. A few thousand past decisions brought it to the classic recommender's level, at a
+  tenth of a second per decision and with honest probabilities.
 
 ## How the experiment was kept honest
 
@@ -481,6 +536,8 @@ error of hit@1 is about ±0.03.
 - **Fresh agents per version.** The agents saw only their own batch of prompts, never the
   answers, other versions' prompts, or any per-decision results. Memo writers saw the
   history but not the shelf.
+- **Training stops before validation.** Laya's training decisions all come from before
+  the validation cutoff, so neither validation nor test decisions were trained on.
 - **Exclusions.** In the first run, 7 people were dropped because their later prompts had
   been read during an earlier faulty export.
 
@@ -489,7 +546,7 @@ error of hit@1 is about ±0.03.
 sandboxed: two reported running several lookup commands in one shell call. Token counts
 are estimates (characters ÷ 4) and leave out reasoning and answer tokens. 11 of the 300
 memos run slightly over 120 words, the longest at 125. One model family wrote the code,
-the memos and the answers.
+the memos and the answers. Laya was trained once, with one seed and default settings.
 
 ## Run it yourself
 
@@ -503,6 +560,15 @@ uv run user-sim llm-export --split test --context full
 
 # score all four contexts next to the baselines
 uv run user-sim llm-eval --split test --context recent full memo memo-tools --reference llm_recent
+
+# Laya: export training rows, fine-tune (GPU; see notebooks/laya_finetune.ipynb), score
+uv sync --extra laya
+uv run user-sim laya-export --context full
+uv run laya-train --base multilingual --data data/laya/matched-full/train.jsonl \
+    --eval data/laya/matched-full/validation.jsonl --out data/laya/checkpoints/laya-movielens-full \
+    --shuffle-options --epochs 4 --device cuda --seed 0
+uv run user-sim laya-eval --split test --context recent full \
+    --checkpoint multilingual data/laya/checkpoints/laya-movielens-full
 
 # redraw the figures in this report
 uv run python docs/figures/make_figures.py

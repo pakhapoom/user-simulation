@@ -1,6 +1,6 @@
 """Render the report's figures as SVG, with no plotting dependency.
 
-The numbers are copied from `user-sim eval` / `user-sim llm-eval` runs on ml-1m (see
+The numbers are copied from `user-sim eval` / `llm-eval` / `laya-eval` runs on ml-1m (see
 docs/report.md). Rerun after changing them:
 
     uv run python docs/figures/make_figures.py
@@ -16,12 +16,12 @@ STYLE = """<style>
   text { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: #556170; }
   .ink { fill: #141B24; } .title { fill: #141B24; font-size: 13px; font-weight: 600; }
   .grid { stroke: #DAE0E7; } .axis { stroke: #556170; } .ref { stroke: #556170; stroke-dasharray: 4 4; }
-  .bg { fill: #FFFFFF; } .base { fill: #9BA6B3; } .llm { fill: #2346C0; } .leak { fill: #C27F0E; }
+  .bg { fill: #FFFFFF; } .base { fill: #9BA6B3; } .llm { fill: #2346C0; } .tuned { fill: #12806F; } .leak { fill: #C27F0E; }
   .chance { fill: #E7EAEE; stroke: #DAE0E7; } .ci { stroke: #141B24; stroke-width: 1.6; opacity: .6; }
   .line-base { stroke: #9BA6B3; } .line-llm { stroke: #2346C0; } .hollow { fill: #FFFFFF; stroke: #2346C0; stroke-width: 2; }
   @media (prefers-color-scheme: dark) {
     text { fill: #9AA6B4; } .ink, .title { fill: #E6EAF0; } .grid { stroke: #273140; }
-    .axis, .ref { stroke: #9AA6B4; } .bg { fill: #151C25; } .base { fill: #5E6A78; } .llm { fill: #8EA5FF; }
+    .axis, .ref { stroke: #9AA6B4; } .bg { fill: #151C25; } .base { fill: #5E6A78; } .llm { fill: #8EA5FF; } .tuned { fill: #4CC2AE; }
     .leak { fill: #F0B13C; } .chance { fill: #222B36; stroke: #273140; } .ci { stroke: #E6EAF0; }
     .line-base { stroke: #5E6A78; } .line-llm { stroke: #8EA5FF; } .hollow { fill: #151C25; stroke: #8EA5FF; }
   }
@@ -82,10 +82,11 @@ def fig_results() -> str:
     rows = [
         ("random", 0.207, "chance", 0.160, 0.253), ("newest film", 0.200, "chance", None, None),
         ("popularity", 0.370, "base", 0.317, 0.423), ("item-kNN", 0.410, "base", 0.353, 0.467),
-        ("LLM · last 20", 0.451, "llm", 0.400, 0.504), ("LLM · memo + tools", 0.474, "llm", 0.419, 0.526),
-        ("LLM · memo", 0.487, "llm", 0.431, 0.541), ("LLM · full history", 0.513, "llm", 0.460, 0.567),
+        ("Laya · trained, full", 0.417, "tuned", 0.360, 0.470), ("LLM · last 20", 0.451, "llm", 0.400, 0.504),
+        ("LLM · memo + tools", 0.474, "llm", 0.419, 0.526), ("LLM · memo", 0.487, "llm", 0.431, 0.541),
+        ("LLM · full history", 0.513, "llm", 0.460, 0.567),
     ]
-    body, h = bars(rows, 20, 24, 720, chance=0.2, label_w=160, row_h=30)
+    body, h = bars(rows, 20, 24, 720, chance=0.2, label_w=170, row_h=30)
     body.append(text(20, h + 10, "hit@1 on 300 test decisions · whiskers: 95% interval (bootstrap over users) · dashed: chance"))
     return svg(760, int(h) + 24, body, "hit@1 with 95% intervals for every predictor")
 

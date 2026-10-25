@@ -19,11 +19,15 @@ Its summary:
    last 20 ratings. The classic recommender gets worse with more history.
 4. **A 120-word profile keeps most of that gain** at about an eighth of the reading cost
    per decision. Giving the LLM lookup tools added nothing.
+5. **A small model trained for the job catches up with the classic recommender, not the
+   LLM.** Off the shelf, the Laya decision model guesses at chance. Fine-tuned on 5,940
+   earlier decisions it scores 42%, in a tenth of a second, with the best-calibrated
+   probabilities of any predictor.
 
 ![hit@1 with 95% intervals for every predictor](docs/figures/results.svg)
 
 300 test decisions (one per user), matched negatives; LLM answers from Claude (Opus 5.5)
-subagents, no API:
+subagents, no API; Laya runs locally (Colab GPU):
 
 | predictor | hit@1 | gauc | log loss | ece | tokens / decision | incl. writing memo |
 |---|---:|---:|---:|---:|---:|---:|
@@ -31,12 +35,19 @@ subagents, no API:
 | newest film | 0.200 | 0.500 | | | | |
 | popularity | 0.370 | 0.629 | | | | |
 | item-kNN | 0.410 | 0.652 | | | | |
+| Laya off the shelf · full history | 0.183 | 0.500 | 0.530 | 0.066 | ~993* | |
+| Laya fine-tuned · last 20 | 0.390 | 0.673 | 0.463 | **0.031** | ~546* | |
+| Laya fine-tuned · full history | 0.417 | 0.681 | 0.463 | 0.035 | ~993* | |
 | LLM · last 20 | 0.451 | 0.706 | 0.454 | 0.052 | ~419 | |
 | LLM · full history | **0.513** | **0.758** | 0.425 | 0.061 | ~3,002 | |
-| LLM · memo | 0.487 | 0.738 | **0.423** | **0.046** | **~351** | ~3,448 |
+| LLM · memo | 0.487 | 0.738 | **0.423** | 0.046 | **~351** | ~3,448 |
 | LLM · memo + tools | 0.474 | 0.737 | 0.440 | 0.060 | ~617 | ~3,714 |
 
-Paired comparisons, the release-year leak we found and fixed, per-agent tool use and the limits are in the report.
+\* Laya's own tokenizer, capped at ~1,000 tokens (270 of 300 full histories trimmed);
+LLM tokens are characters ÷ 4.
+
+Paired comparisons, the release-year leak we found and fixed, per-agent tool use, Laya's
+training and the limits are in the report.
 
 ## Workflow
 
@@ -47,8 +58,10 @@ flowchart LR
     C --> D{"Predictor"}
     D --> D1["Baselines<br/>random, popularity, item-kNN"]
     D --> D2["LLM agent<br/>4 context strategies"]
+    D --> D3["Laya decision model<br/>off the shelf, fine-tuned"]
     D1 --> E["Metrics<br/>hit@1, gauc, auc, calibration"]
     D2 --> E
+    D3 --> E
     E --> F["Compare: accuracy,<br/>calibration, cost per decision"]
 ```
 
@@ -125,6 +138,24 @@ Each answer is keyed by a hash of the episode and the exact prompt, so editing t
 invalidates old answers. Users listed in `<run dir>/excluded_users.txt` are dropped from
 the subset (see [How the experiment was kept honest](docs/report.md#how-the-experiment-was-kept-honest)).
 
+[Laya](https://huggingface.co/convaiinnovations/laya) is a decision model that scores the
+slate in one forward pass, with no text generated (`uv sync --extra laya`). `laya-eval`
+scores published or fine-tuned checkpoints with the `recent` or `full` context on the
+same subset. `laya-export` writes fine-tuning rows from 14-day windows before the
+validation cutoff, so neither validation nor test episodes are trained on, plus the
+validation episodes for `laya-train --eval`. Fine-tuning needs a GPU:
+[notebooks/laya_finetune.ipynb](notebooks/laya_finetune.ipynb) runs export, training and
+scoring on Colab.
+
+```bash
+uv run user-sim laya-export --context full                 # data/laya/matched-full/{train,validation}.jsonl
+uv run laya-train --base multilingual --data data/laya/matched-full/train.jsonl \
+    --eval data/laya/matched-full/validation.jsonl --out data/laya/checkpoints/laya-movielens-full \
+    --shuffle-options --epochs 4 --device cuda --seed 0
+uv run user-sim laya-eval --split test --context recent full \
+    --checkpoint multilingual data/laya/checkpoints/laya-movielens-full
+```
+
 Datasets download to `data/raw/` on first use (git-ignored).
 
 ## Baselines (ml-1m test split, default settings, seed 0)
@@ -181,9 +212,12 @@ src/user_simulation/
   baselines/   random, popularity, newest-release, item-kNN
   agent.py     offline LLM agent: context strategies, prompt export, answer cache, Predictor
   tools.py     lookup tools for the memo-tools context (per-episode data + CLI)
+  laya_agent.py Laya decision model as a Predictor, plus fine-tuning row export
   eval/        metrics and the evaluate() runner
   predictor.py the Predictor protocol every simulator (incl. the LLM agent) implements
 docs/
   report.md    plain-language write-up of the experiment and its results
   figures/     the report's SVG figures and the script that draws them
+notebooks/
+  laya_finetune.ipynb  Colab: export, fine-tune and score Laya on a GPU
 ```
